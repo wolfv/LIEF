@@ -17,13 +17,12 @@ macro(ADD_FLAG_IF_SUPPORTED flag name)
   endif()
 endmacro()
 
-set(PYTHON_VERSION "3.5" CACHE STRING "Python Version to use")
-find_package(PythonLibsNew EXACT ${PYTHON_VERSION} MODULE REQUIRED)
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
-message(STATUS "Python version: ${PYTHON_VERSION}")
-message(STATUS "Python lib:     ${PYTHON_LIBRARY}")
-message(STATUS "Python include: ${PYTHON_INCLUDE_DIR}")
-message(STATUS "Python interpreter: ${PYTHON_EXECUTABLE}")
+message(STATUS "Python version: ${Python3_VERSION}")
+message(STATUS "Python lib:     ${Python3_LIBRARIES}")
+message(STATUS "Python include: ${Python3_INCLUDE_DIRS}")
+message(STATUS "Python interpreter: ${Python3_EXECUTABLE}")
 
 set(PYBIND11_VERSION 2.6.1)
 set(PYBIND11_SHA256 SHA256=e3f9408fca4e8ebf2d22229d5256adb49098073832aad87f3f6078d91a6942b2)
@@ -75,7 +74,9 @@ set(LIEF_PYTHON_HDR
 
 source_group("Header Files" FILES ${LIEF_PYTHON_BASIC_HDR})
 
-add_library(pyLIEF SHARED ${LIEF_PYTHON_SRC} ${LIEF_PYTHON_HDR})
+Python3_add_library(pyLIEF MODULE
+  ${LIEF_PYTHON_SRC} ${LIEF_PYTHON_HDR}
+)
 
 target_include_directories(pyLIEF PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/"

@@ -135,7 +135,8 @@ class BuildLibrary(build_ext):
 
         cmake_args += [
             '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={}'.format(cmake_library_output_directory),
-            '-DPYTHON_EXECUTABLE={}'.format(sys.executable),
+            '-DPython3_ROOT_DIR={}'.format(sys.prefix),
+            '-DPython3_FIND_STRATEGY=LOCATION',
             '-DLIEF_PYTHON_API=on',
         ]
 
@@ -260,7 +261,6 @@ class BuildLibrary(build_ext):
 
         if platform.system() == "Windows":
             build_cmd = ['cmake', '--build', '.', '--target', "lief_samples"] + build_args
-            #log.info(" ".join(build_cmd))
 
             if self.distribution.lief_test:
                 subprocess.check_call(['cmake', '--build', '.', '--target', "lief_samples"] + build_args, cwd=self.build_temp, env=env)
@@ -284,7 +284,7 @@ class BuildLibrary(build_ext):
                     subprocess.check_call(['ninja'], cwd=self.build_temp)
                     subprocess.check_call(['ninja', "check-lief"], cwd=self.build_temp)
                 else:
-                    subprocess.check_call(['ninja', "-v", targets['python_bindings']], cwd=self.build_temp, env=env)
+                    subprocess.check_call(['ninja', targets['python_bindings']], cwd=self.build_temp, env=env)
 
                 if 'sdk' in targets:
                     subprocess.check_call(['ninja', targets['sdk']], cwd=self.build_temp, env=env)
