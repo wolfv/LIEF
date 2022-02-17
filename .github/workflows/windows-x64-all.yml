@@ -6,6 +6,7 @@ on:
     branches:
       - 'master'
       - 'release-**'
+      - 'gha-windows'
     tags:
       - '**'
 
@@ -47,9 +48,9 @@ jobs:
       continue-on-error: false
       with:
         path: "C:\\Users\\runner\\AppData\\Local\\Mozilla\\sccache"
-        key: ${{ runner.os }}-x64-sccache-${{ matrix.python-version }}-${{ steps.get-date.outputs.date }}
+        key: ${{ runner.os }}-x64-sccache-${{ steps.get-date.outputs.date }}
         restore-keys: |
-          ${{ runner.os }}-x64-sccache-${{ matrix.python-version }}-
+          ${{ runner.os }}-x64-sccache-
     - name: Start sccache server
       run: sccache --start-server
     - name: ⛓ Build Python ${{ matrix.python-version }} & Test
