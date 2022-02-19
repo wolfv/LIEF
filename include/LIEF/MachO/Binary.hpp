@@ -67,7 +67,10 @@ class LIEF_API Binary : public LIEF::Binary  {
   friend class DyldInfo;
 
   public:
-  using range_t = std::pair<uint64_t, uint64_t>;
+  struct range_t {
+    uint64_t start = 0;
+    uint64_t end   = 0;
+  };
 
   //! Internal container for storing Mach-O LoadCommand
   using commands_t = std::vector<std::unique_ptr<LoadCommand>>;
@@ -585,6 +588,8 @@ class LIEF_API Binary : public LIEF::Binary  {
   void shift(size_t value);
 
   void shift_command(size_t width, size_t from_offset);
+
+  ok_error_t shift_linkedit(size_t width);
 
   //! Insert a Segment command in the cache field (segments_)
   //! and keep a consistent state of the indexes.

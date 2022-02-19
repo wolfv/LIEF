@@ -545,6 +545,120 @@ SegmentCommand* Binary::segment_from_offset(uint64_t offset) {
   return const_cast<SegmentCommand*>(static_cast<const Binary*>(this)->segment_from_offset(offset));
 }
 
+
+ok_error_t Binary::shift_linkedit(size_t width) {
+  SegmentCommand* linkedit = get_segment("__LINKEDIT");
+  if (linkedit == nullptr) {
+    LIEF_INFO("Can't find __LINKEDIT");
+    return make_error_code(lief_errors::not_found);
+  }
+  const uint64_t lnk_offset = linkedit->file_offset();
+  /* const uint64_t lnk_size   = linkedit->file_size(); */
+  /* const uint64_t lnk_end    = lnk_offset + lnk_size; */
+
+  if (SymbolCommand* sym_cmd = symbol_command()) {
+
+    if (lnk_offset <= sym_cmd->symbol_offset()) {
+      sym_cmd->symbol_offset(sym_cmd->symbol_offset() + width);
+    }
+
+    if (lnk_offset <= sym_cmd->strings_offset()) {
+      sym_cmd->strings_offset(sym_cmd->strings_offset() + width);
+    }
+  }
+
+
+  if (DataInCode* data_code_cmd = data_in_code()) {
+    if (lnk_offset <= data_code_cmd->data_offset()) {
+      data_code_cmd->data_offset(data_code_cmd->data_offset() + width);
+    }
+  }
+
+  if (CodeSignature* sig = code_signature()) {
+    if (lnk_offset <= sig->data_offset()) {
+      sig->data_offset(sig->data_offset() + width);
+    }
+  }
+
+  if (CodeSignature* sig_dir = code_signature_dir()) {
+    if (lnk_offset <= sig_dir->data_offset()) {
+      sig_dir->data_offset(sig_dir->data_offset() + width);
+    }
+  }
+
+  if (SegmentSplitInfo* ssi = segment_split_info()) {
+    if (lnk_offset <= ssi->data_offset()) {
+      ssi->data_offset(ssi->data_offset() + width);
+    }
+  }
+
+  if (FunctionStarts* fs = function_starts()) {
+    if (lnk_offset <= fs->data_offset()) {
+      fs->data_offset(fs->data_offset() + width);
+    }
+  }
+
+  if (DynamicSymbolCommand* dyn_cmd = dynamic_symbol_command()) {
+    if (lnk_offset <= dyn_cmd->toc_offset()) {
+      dyn_cmd->toc_offset(dyn_cmd->toc_offset() + width);
+    }
+
+    if (lnk_offset <= dyn_cmd->module_table_offset()) {
+      dyn_cmd->module_table_offset(dyn_cmd->module_table_offset() + width);
+    }
+
+    if (lnk_offset <= dyn_cmd->external_reference_symbol_offset()) {
+      dyn_cmd->external_reference_symbol_offset(dyn_cmd->external_reference_symbol_offset() + width);
+    }
+
+    if (lnk_offset <= dyn_cmd->indirect_symbol_offset()) {
+      dyn_cmd->indirect_symbol_offset(dyn_cmd->indirect_symbol_offset() + width);
+    }
+
+    if (lnk_offset <= dyn_cmd->external_relocation_offset()) {
+      dyn_cmd->external_relocation_offset(dyn_cmd->external_relocation_offset() + width);
+    }
+
+    if (lnk_offset <= dyn_cmd->local_relocation_offset()) {
+      dyn_cmd->local_relocation_offset(dyn_cmd->local_relocation_offset() + width);
+    }
+  }
+  if (DyldInfo* dyld = dyld_info()) {
+
+    if (lnk_offset <= dyld->rebase().first) {
+      dyld->set_rebase_offset(dyld->rebase().first + width);
+    }
+
+    if (lnk_offset <= dyld->bind().first) {
+      dyld->set_bind_offset(dyld->bind().first + width);
+    }
+
+    if (lnk_offset <= dyld->weak_bind().first) {
+      dyld->set_weak_bind_offset(dyld->weak_bind().first + width);
+    }
+
+    if (lnk_offset <= dyld->lazy_bind().first) {
+      dyld->set_lazy_bind_offset(dyld->lazy_bind().first + width);
+    }
+
+    if (lnk_offset <= dyld->export_info().first) {
+      dyld->set_export_offset(dyld->export_info().first + width);
+    }
+  }
+
+  linkedit->file_offset(linkedit->file_offset() + width);
+  linkedit->virtual_address(linkedit->virtual_address() + width);
+  for (const std::unique_ptr<Section>& section : linkedit->sections_) {
+    if (lnk_offset <= section->offset()) {
+      section->offset(section->offset() + width);
+      section->virtual_address(section->virtual_address() + width);
+    }
+  }
+  offset_seg_.erase(lnk_offset);
+  offset_seg_[linkedit->file_offset()] = linkedit;
+  return ok();
+}
+
 void Binary::shift_command(size_t width, size_t from_offset) {
   const SegmentCommand* segment = segment_from_offset(from_offset);
 
@@ -623,6 +737,9 @@ void Binary::shift_command(size_t width, size_t from_offset) {
   // Patch function starts
   // =====================
   if (FunctionStarts* fs = function_starts()) {
+    if (fs->data_offset() < from_offset) {
+      fs->data_offset(fs->data_offset() + width);
+    }
     fs->data_offset(fs->data_offset() + width);
     for (uint64_t& address : fs->functions()) {
       if ((__text_base_addr + address) > virtual_address) {
@@ -726,7 +843,17 @@ void Binary::shift(size_t value) {
   const uint64_t loadcommands_start = is64_ ? sizeof(details::mach_header_64) :
                                               sizeof(details::mach_header);
 
-  // End offset of the load commands table
+  // +------------------------+ <---------- __TEXT.start
+  // |      Mach-O Header     |
+  // +------------------------+ <===== loadcommands_start
+  // |                        |
+  // | Load Command Table     |
+  // |                        |
+  // +------------------------+ <===== loadcommands_end
+  // |************************|
+  // |************************| Assembly code
+  // |************************|
+  // +------------------------+ <---------- __TEXT.end
   const uint64_t loadcommands_end = loadcommands_start + header.sizeof_cmds();
 
   // Segment that wraps this load command table
@@ -757,6 +884,7 @@ void Binary::shift(size_t value) {
     if (segment->file_offset() <= loadcommands_end &&
         loadcommands_end < (segment->file_offset() + segment->file_size()))
     {
+      LIEF_DEBUG("Extending '{}' by {:x}", segment->name(), value);
       segment->virtual_size(segment->virtual_size() + value);
       segment->file_size(segment->file_size() + value);
 
@@ -1238,18 +1366,59 @@ Section* Binary::add_section(const SegmentCommand& segment, const Section& secti
 
 
 LoadCommand& Binary::add(const SegmentCommand& segment) {
+  /*
+   * To add a new segment in a Mach-O file, we need to:
+   *
+   * 1. Allocate space for a new Load command: LC_SEGMENT_64 / LC_SEGMENT
+   *    which must include the sections
+   * 2. Allocate space for the content of the provided segment
+   *
+   * For #1, the logic is to shift all the content after the end of the load command table.
+   * This modification is described in doc/sphinx/tutorials/11_macho_modification.rst.
+   *
+   * For #2, the easiest way is to place the content at the end of the Mach-O file and
+   * to make the LC_SEGMENT point to this area. It works as expected as long as
+   * the binary does not need to be signed.
+   *
+   * If the binary has to be signed, codesign and the underlying Apple libraries
+   * enforce that there is not data after the __LINKEDIT segment, otherwise we get
+   * this kind of error: "main executable failed strict validation".
+   * To comply with this check, we can shift the __LINKEDIT segment (c.f. ``shift_linkedit(...)``)
+   * such as the data of the new segment are located before __LINKEDIT.
+   * Nevertheless, we can't shift __LINKEDIT by an arbitrary value. For ARM and ARM64,
+   * ld/dyld enforces a segment alignment of "4 * 4096" as coded in ``Options::reconfigureDefaults``
+   * of ``ld64-609/src/ld/Option.cpp``:
+   *
+   * ```cpp
+   * ...
+   * <rdar://problem/13070042> Only third party apps should have 16KB page segments by default
+   * if (fEncryptable) {
+   *  if (fSegmentAlignment == 4096)
+   *    fSegmentAlignment = 4096*4;
+   * }
+   *
+   * // <rdar://problem/12258065> ARM64 needs 16KB page size for user land code
+   * // <rdar://problem/15974532> make armv7[s] use 16KB pages in user land code for iOS 8 or later
+   * if (fArchitecture == CPU_TYPE_ARM64 || (fArchitecture == CPU_TYPE_ARM) ) {
+   *   fSegmentAlignment = 4096*4;
+   * }
+   * ```
+   * Therefore, we must shift __LINKEDIT by at least 4 * 0x1000 for Mach-O files targeting ARM
+   */
+  static SegmentCommand cmd;
+  const bool is_arm = header().cpu_type() == CPU_TYPES::CPU_TYPE_ARM ||
+                      header().cpu_type() == CPU_TYPES::CPU_TYPE_ARM64;
+  const uint32_t alignment = is_arm ? 4 * 0x1000 : 0x1000;
+  const uint64_t new_fsize = align(segment.content().size(), alignment);
   SegmentCommand new_segment = segment;
 
-  range_t va_ranges  = this->va_ranges();
-
-
   if (new_segment.file_size() == 0) {
-    const uint64_t new_size = segment.content().size();
-    new_segment.file_size(new_size);
+    new_segment.file_size(new_fsize);
+    new_segment.content_resize(new_fsize);
   }
 
   if (new_segment.virtual_size() == 0) {
-    const uint64_t new_size = align(new_segment.file_size(), getpagesize());
+    const uint64_t new_size = align(new_segment.file_size(), alignment);
     new_segment.virtual_size(new_size);
   }
 
@@ -1271,50 +1440,80 @@ LoadCommand& Binary::add(const SegmentCommand& segment) {
 
 
   // Insert the segment before __LINKEDIT
-  const auto it_linkedit = std::find_if(
-      std::begin(commands_), std::end(commands_),
+  const auto it_linkedit = std::find_if(std::begin(commands_), std::end(commands_),
       [] (const std::unique_ptr<LoadCommand>& cmd) {
         if (!SegmentCommand::classof(cmd.get())) {
           return false;
         }
         return cmd->as<SegmentCommand>()->name() == "__LINKEDIT";
       });
+  const bool has_linkedit = it_linkedit != std::end(commands_);
+  uint64_t lnk_offset = 0;
+  uint64_t lnk_va     = 0;
+
+  if (has_linkedit) {
+    auto* lnk = (*it_linkedit)->as<SegmentCommand>();
+
+    lnk_offset = lnk->file_offset();
+    lnk_va     = lnk->virtual_address();
+  }
 
   size_t pos = std::distance(std::begin(commands_), it_linkedit);
   auto& segment_added = *add(new_segment, pos).as<SegmentCommand>();
 
-  // As virtual address should be shifted after "add" we need to re-update the virtual address after this operation
-  range_t new_va_ranges  = this->va_ranges();
-  range_t new_off_ranges = off_ranges();
-
-  const bool should_patch = (new_va_ranges.second - segment_added.virtual_size()) != va_ranges.second;
-  if (segment.virtual_address() == 0 && should_patch) {
-    const uint64_t new_va = align(new_va_ranges.second, getpagesize());
-    segment_added.virtual_address(new_va);
-    size_t current_va = segment_added.virtual_address();
-    for (Section& section : segment_added.sections()) {
-      section.virtual_address(current_va);
-      current_va += section.size();
+  if (!has_linkedit) {
+    /* If there are not __LINKEDIT segment we can point the Segment's content to the EOF
+     * NOTE(romain): I don't know if a binary without a __LINKEDIT segment exists
+     */
+    range_t new_va_ranges  = this->va_ranges();
+    range_t new_off_ranges = off_ranges();
+    if (segment.virtual_address() == 0 && segment_added.virtual_size() != 0) {
+      const uint64_t new_va = align(new_va_ranges.end, alignment);
+      segment_added.virtual_address(new_va);
+      size_t current_va = segment_added.virtual_address();
+      for (Section& section : segment_added.sections()) {
+        section.virtual_address(current_va);
+        current_va += section.size();
+      }
     }
 
-  }
-
-  if (segment.file_offset() == 0 && should_patch) {
-    const uint64_t new_offset = align(new_off_ranges.second, getpagesize());
-    segment_added.file_offset(new_offset);
-    size_t current_offset = new_offset;
-    for (Section& section : segment_added.sections()) {
-      section.offset(current_offset);
-
-      current_offset += section.size();
+    if (segment.file_offset() == 0 && segment_added.virtual_size() != 0) {
+      const uint64_t new_offset = align(new_off_ranges.end, alignment);
+      segment_added.file_offset(new_offset);
+      size_t current_offset = new_offset;
+      for (Section& section : segment_added.sections()) {
+        section.offset(current_offset);
+        current_offset += section.size();
+      }
     }
+    offset_seg_[segment.file_offset()] = &segment_added;
+    return segment_added;
   }
 
+  // Make space for the content of the new segment
+  shift_linkedit(new_fsize);
+
+  segment_added.virtual_address(lnk_va);
+  segment_added.virtual_size(segment_added.file_size());
+  size_t current_va = segment_added.virtual_address();
+  for (Section& section : segment_added.sections()) {
+    section.virtual_address(current_va);
+    current_va += section.size();
+  }
+
+  segment_added.file_offset(lnk_offset);
+  size_t current_offset = lnk_offset;
+  for (Section& section : segment_added.sections()) {
+    section.offset(current_offset);
+    current_offset += section.size();
+  }
+
+  offset_seg_[segment.file_offset()] = &segment_added;
   return segment_added;
 }
 
 size_t Binary::add_cached_segment(SegmentCommand& segment) {
-  // The new segement should be put **befor** the __LINKEDIT
+  // The new segement should be put **before** the __LINKEDIT
   // segment
   const auto it_linkedit = std::find_if(std::begin(segments_), std::end(segments_),
       [] (SegmentCommand* cmd) { return cmd->name() == "__LINKEDIT"; });
@@ -1331,7 +1530,9 @@ size_t Binary::add_cached_segment(SegmentCommand& segment) {
     (*it)->index_++;
   }
   segments_.insert(it_linkedit, &segment);
-  offset_seg_[segment.file_offset()] = &segment;
+  if (segment.file_offset() > 0) {
+    offset_seg_[segment.file_offset()] = &segment;
+  }
   segment.dyld_ = dyld_info();
   return segment.index();
 }
@@ -1527,12 +1728,11 @@ bool Binary::can_remove_symbol(const std::string& name) const {
 
 
 bool Binary::remove_signature() {
-  const CodeSignature* cs = code_signature();
-  if (cs == nullptr) {
-    LIEF_WARN("No signature found");
-    return false;
+  if (const CodeSignature* cs = code_signature()) {
+    return remove(*cs);
   }
-  return remove(*cs);
+  LIEF_WARN("No signature found");
+  return false;
 }
 
 LoadCommand& Binary::add(const DylibCommand& library) {
@@ -1639,20 +1839,18 @@ uint64_t Binary::virtual_size() const {
 }
 
 uint64_t Binary::imagebase() const {
-  const SegmentCommand* _TEXT = get_segment("__TEXT");
-  if (_TEXT == nullptr) {
-    return 0;
+  if (const SegmentCommand* _TEXT = get_segment("__TEXT")) {
+    return _TEXT->virtual_address();
   }
-  return _TEXT->virtual_address();
+  return 0;
 }
 
 
 std::string Binary::loader() const {
-  const DylinkerCommand* cmd = dylinker();
-  if (cmd == nullptr) {
-    return "";
+  if (const DylinkerCommand* cmd = dylinker()) {
+    return cmd->name();
   }
-  return cmd->name();
+  return "";
 }
 
 uint64_t Binary::fat_offset() const {
@@ -1662,7 +1860,7 @@ uint64_t Binary::fat_offset() const {
 
 bool Binary::is_valid_addr(uint64_t address) const {
   range_t r = va_ranges();
-  return r.first <= address && address < r.second;
+  return r.start <= address && address < r.end;
 }
 
 

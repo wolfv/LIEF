@@ -2076,7 +2076,7 @@ ok_error_t BinaryParser::do_rebase(uint8_t type, uint8_t segment_idx, uint64_t s
   reloc->segment_ = &segment;
   Section* section = binary_->section_from_virtual_address(address);
   if (section == nullptr) {
-    LIEF_ERR("Can't find the section associated with the virtual address 0x{:x}");
+    LIEF_ERR("Can't find the section associated with the virtual address 0x{:x}", address);
     return make_error_code(lief_errors::not_found);
   }
   reloc->section_ = section;
